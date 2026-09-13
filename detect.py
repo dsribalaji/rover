@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Minimal camera access logger.
+"""Camera + YOLO detection logger: one line per inferred frame.
 
-This script opens a camera device, reads frames continuously,
-and logs basic information (timestamp, frame number, size,
-mean brightness and approximate fps) to the terminal.
+Opens a camera, reads frames on a capture thread, runs YOLOv8 inference on the
+newest frame only, and logs timestamp, frame number, size, approximate inference
+fps and per-class detection counts.
 
 Usage examples:
   python3 detect.py
-  python3 detect.py --device 0 --interval 0.5
+  python3 detect.py --device /dev/video0 --imgsz 416
 """
 
 import argparse
@@ -29,34 +29,46 @@ def _signal_handler(sig, frame):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Camera access logger")
-    parser.add_argument("--device", "-d", type=int, default=0, help="camera device index (default: 0)")
+    parser = argparse.ArgumentParser(description="Camera + YOLO detection logger")
     parser.add_argument(
-        "--interval",
-        "-i",
-        type=float,
-        default=0.0,
-        help="minimum seconds between printed log lines (0 = every frame)",
+        "--device",
+        "-d",
+        default="/dev/video0",
+        help="camera device path or index (default: /dev/video0); V4L2 is pinned, so "
+        "an index N means /dev/videoN rather than OpenCV's probe order",
     )
     parser.add_argument("--model", "-m", default="yolov8n.pt", help="path to yolov8 model (default: yolov8n.pt)")
     parser.add_argument("--conf", "-c", type=float, default=0.25, help="confidence threshold")
-    parser.add_argument("--skip", "-s", type=int, default=0, help="skip N frames between inferences (0 = every frame)")
     parser.add_argument("--width", type=int, default=640, help="capture width (px)")
-    parser.add_argument("--height", type=int, default=360, help="capture height (px)")
-    parser.add_argument("--imgsz", type=int, default=640, help="YOLO inference image size (px)")
+    parser.add_argument("--height", type=int, default=480, help="capture height (px)")
+    parser.add_argument("--imgsz", type=int, default=416, help="YOLO inference image size (px)")
     args = parser.parse_args()
 
-    cap = cv2.VideoCapture(args.device)
+    # An index and a device path are the same camera; accept either so this script
+    # selects the device the way person_follow.py does.
+    camera_device = int(args.device) if args.device.isdigit() else args.device
+
+    cap = cv2.VideoCapture(camera_device, cv2.CAP_V4L2)
     if not cap.isOpened():
         print(f"ERROR: cannot open camera device {args.device}", file=sys.stderr)
         sys.exit(2)
 
     print(f"Opened camera device {args.device}")
 
-    # attempt to load YOLO model
     # configure capture resolution to reduce CPU load
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    # V4L2 accepts or ignores a resolution request without telling the caller, so
+    # report what the camera actually handed back rather than what was asked for.
+    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    if (actual_w, actual_h) not in ((0, 0), (args.width, args.height)):
+        print(
+            f"WARNING: camera reports {actual_w}x{actual_h}, not the requested "
+            f"{args.width}x{args.height}; frames will be resized before inference"
+        )
 
     try:
         from ultralytics import YOLO
@@ -97,9 +109,6 @@ def main():
     print(f"Loaded model: {args.model} on {device}")
     frame_count = 0
     start_time = time.time()
-    last_log_time = 0.0
-    fps_acc_count = 0
-    fps_acc_time = time.time()
 
     # Use a single-slot queue so we always infer the latest frame
     frame_queue: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=1)
@@ -135,7 +144,7 @@ def main():
     alpha = 0.15
 
     def _inference_loop():
-        nonlocal frame_count, fps_acc_count, last_log_time, fps_acc_time, ema_fps
+        nonlocal frame_count, ema_fps
         while not stop_event.is_set():
             try:
                 frame = frame_queue.get(timeout=1.0)

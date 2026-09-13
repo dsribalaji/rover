@@ -4,113 +4,17 @@ Run from a terminal on the Pi (raw-mode stdin, so a pipe or cron job will not wo
 
     ./yolo_env/bin/python rover.py
 
-W/S forward/back, A/D gentle turns, Q/E pivots, Space stop, +/- speed trim, X exit.
-Any unmapped key stops the robot. Wiring and the 0-100 percent speed convention are
-documented in docs/hardware.md; the same pin set appears in person_follow.py and
+W/S forward/back, A/D gentle turns, Q/E pivots, Space stop, +/- speed trim, X or
+Ctrl+C exit. Any unmapped key stops the robot, and so does stdin closing. The pins and
+the motor class come from drivetrain.py, shared with person_follow.py and
 motor_test.py.
 """
 
-from gpiozero import Motor
-import time
 import sys
 import tty
 import termios
 
-class TwoChannelMotorController:
-    def __init__(self):
-        # Left motors (Motor 1 & 2) pins
-        # ENA=12, IN1=23, IN2=24
-        self.motor_left = Motor(forward=23, backward=24, enable=12)
-        
-        # Right motors (Motor 3 & 4) pins
-        # ENB=13, IN3=27, IN4=22
-        self.motor_right = Motor(forward=27, backward=22, enable=13)
-        
-        # Default speed (0.0 to 1.0 in gpiozero)
-        self.speed = 60
-    
-    def left_motors(self, direction, speed):
-        """Control left side motors (1 & 2)"""
-        speed_val = speed / 100.0
-        if direction == 'forward':
-            self.motor_left.forward(speed_val)
-        elif direction == 'backward':
-            self.motor_left.backward(speed_val)
-        elif direction == 'stop':
-            self.motor_left.stop()
-    
-    def right_motors(self, direction, speed):
-        """Control right side motors (3 & 4)"""
-        speed_val = speed / 100.0
-        if direction == 'forward':
-            self.motor_right.forward(speed_val)
-        elif direction == 'backward':
-            self.motor_right.backward(speed_val)
-        elif direction == 'stop':
-            self.motor_right.stop()
-    
-    def move_forward(self, speed=None):
-        """Move robot forward"""
-        if speed is None:
-            speed = self.speed
-        self.left_motors('forward', speed)
-        self.right_motors('forward', speed)
-    
-    def move_backward(self, speed=None):
-        """Move robot backward"""
-        if speed is None:
-            speed = self.speed
-        self.left_motors('backward', speed)
-        self.right_motors('backward', speed)
-    
-    def turn_left(self, speed=None):
-        """Turn left (left motors stop/slow, right forward)"""
-        if speed is None:
-            speed = self.speed
-        self.left_motors('backward', speed // 2)
-        self.right_motors('forward', speed)
-    
-    def turn_right(self, speed=None):
-        """Turn right (left motors forward, right stop/slow)"""
-        if speed is None:
-            speed = self.speed
-        self.left_motors('forward', speed)
-        self.right_motors('backward', speed // 2)
-    
-    def pivot_left(self, speed=None):
-        """Pivot left in place (left backward, right forward)"""
-        if speed is None:
-            speed = self.speed
-        self.left_motors('backward', speed)
-        self.right_motors('forward', speed)
-    
-    def pivot_right(self, speed=None):
-        """Pivot right in place (left forward, right backward)"""
-        if speed is None:
-            speed = self.speed
-        self.left_motors('forward', speed)
-        self.right_motors('backward', speed)
-    
-    def stop_all(self):
-        """Stop all motors"""
-        self.motor_left.stop()
-        self.motor_right.stop()
-    
-    def increase_speed(self):
-        """Increase speed by 10%"""
-        self.speed = min(100, self.speed + 10)
-        return self.speed
-    
-    def decrease_speed(self):
-        """Decrease speed by 10%"""
-        self.speed = max(20, self.speed - 10)
-        return self.speed
-    
-    def cleanup(self):
-        """Clean up"""
-        self.stop_all()
-        self.motor_left.close()
-        self.motor_right.close()
+from drivetrain import TwoChannelMotorController
 
 
 class KeyboardController:
@@ -118,15 +22,19 @@ class KeyboardController:
         self.robot = TwoChannelMotorController()
     
     def get_key(self):
-        """Get single keypress without waiting for Enter"""
+        """Get single keypress without waiting for Enter.
+
+        Returns None once stdin is exhausted (SSH dropped, pipe closed), which the
+        control loop treats as an exit rather than an unknown key.
+        """
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         try:
-            tty.setraw(sys.stdin.fileno())
+            tty.setraw(fd)
             ch = sys.stdin.read(1)
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-        return ch
+        return ch or None
     
     def print_controls(self):
         """Display control instructions"""
@@ -155,12 +63,27 @@ class KeyboardController:
     
     def run(self):
         """Main control loop"""
+        if not sys.stdin.isatty():
+            print(
+                "ERROR: rover.py needs a terminal for raw key input. "
+                "Run it directly on the Pi; a pipe, cron job or redirected stdin "
+                "will not work.",
+                file=sys.stderr,
+            )
+            return 1
+
         self.print_controls()
         
         try:
             while True:
                 key = self.get_key()
-                
+
+                # Stdin exhausted: the terminal is gone, so do not keep spinning on it.
+                if key is None:
+                    print("\n\n🛑 Input closed - stopping motors...")
+                    self.robot.stop_all()
+                    break
+
                 # Forward
                 if key in ['w', 'W']:
                     self.robot.move_forward()
@@ -206,8 +129,9 @@ class KeyboardController:
                     new_speed = self.robot.decrease_speed()
                     self.update_status(f"⬇️  Speed decreased to {new_speed}%")
                 
-                # Exit
-                elif key in ['x', 'X']:
+                # Exit. Raw mode clears ISIG, so Ctrl+C reaches us as the 0x03 byte
+                # rather than as KeyboardInterrupt — treat it as the exit key here.
+                elif key in ['x', 'X', '\x03']:
                     print("\n\n🛑 Stopping motors and exiting...")
                     self.robot.stop_all()
                     break
@@ -229,4 +153,5 @@ class KeyboardController:
 
 if __name__ == "__main__":
     controller = KeyboardController()
-    controller.run()
+    # run() returns 1 when there is no terminal to read keys from.
+    sys.exit(controller.run())

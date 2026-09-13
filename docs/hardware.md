@@ -28,7 +28,9 @@ Four motors, wired as two independent channels — one per side — so each side
 steers by varying its own two wheels together. This is a skid-steer layout, and
 the code leans on it for the pivot modes.
 
-Channel wiring, identical in `rover.py`, `motor_test.py`, and `person_follow.py`:
+Channel wiring, defined once in `drivetrain.py` as `LEFT_FORWARD` / `LEFT_BACKWARD` /
+`LEFT_ENABLE` and `RIGHT_FORWARD` / `RIGHT_BACKWARD` / `RIGHT_ENABLE`, which the other
+scripts import — so a rewiring is a one-file change:
 
 | Channel | gpiozero `Motor` | Direction pins (BCM) | Enable / PWM pin (BCM) |
 | --- | --- | --- | --- |
@@ -57,36 +59,42 @@ The code speaks to the driver through the label set `ENA / IN1 / IN2 / IN3 /
 IN4 / ENB` — the dual-channel pin naming used by L298N-style dual H-bridge
 breakouts. No part number is recorded anywhere in the project, so treat the model
 as "dual H-bridge, L298N-compatible pinout" and confirm on the bench before
-re-wiring. Two consequences worth remembering:
+re-wiring. That bench check is `motor_test.py`: it drives bare `Motor` objects on the
+shared constants, so it confirms the pins themselves are reachable, and exits 0 only if
+the whole sequence ran; any error, Ctrl+C, or missing gpiozero exits 1. Two
+consequences worth remembering:
 
 - Both direction lines and the enable line must come from the Pi's 3.3 V logic, so
   a 5 V-supplied L298N needs its logic high threshold met at 3.3 V (true for the
   common modules, but the reason a jumper or level shift sometimes appears on the
   EN pins).
-- Speed is entirely software PWM on the EN lines. Nothing in the code limits
-  current or ramps acceleration, so a hard direction change (the pivot calls in
-  `rover.py`) is a full stall-and-reverse step for that side.
+- Speed is the duty cycle on the EN lines. Nothing in the code limits current or
+  ramps acceleration, so a hard direction change — a teleop pivot, or a search scan
+  that flips a wheel from forward to backward — is a full stall-and-reverse step for
+  that side.
 
 ### Speed conventions
 
-`TwoChannelMotorController` stores speed as an integer percent and divides by 100
-before calling gpiozero:
+`TwoChannelMotorController` in `drivetrain.py` takes integer percentages, divides the
+magnitude by 100 for gpiozero, and uses the sign to choose the direction pins:
 
 | Value in code | gpiozero sees | Effect |
 | --- | --- | --- |
-| `60` (default in `rover.py` / `person_follow.py`) | `0.60` | 60 % duty on the EN line |
-| `100` (`increase_speed` ceiling) | `1.00` | full |
-| `20` (`decrease_speed` floor in `rover.py`) | `0.20` | crawl |
-| `speed // 2` inside `turn_left` / `turn_right` | half of the current value | inside wheel backs up |
+| `60` (`self.speed`, the class default) | `0.60` | 60 % duty on the EN line |
+| `MAX_SPEED` = `100` (`increase_speed` ceiling) | `1.00` | full |
+| `MIN_SPEED` = `20` (`decrease_speed` floor) | `0.20` | crawl |
+| `SPEED_STEP` = `10` | one trim step | what `+` / `-` move by in teleop |
+| `-(speed // 2)` inside `turn_left` / `turn_right` | half the magnitude, backward | inside wheel backs up |
 
-The stray comment `# Default speed (0.0 to 1.0 in gpiozero)` above `self.speed =
-60` describes the gpiozero unit, not the one the class uses. See
-[code-notes.md](code-notes.md).
+Reverse is therefore first-class, not a teleop-only trick: `drive(-40, 40)` pivots left,
+`move_backward` takes both channels negative, and following mode reverses the inner wheel
+on every search scan (see [architecture.md](architecture.md)).
 
 ## Teleop keyboard
 
 `rover.py` reads raw keystrokes through `tty.setraw` on `stdin`, so it must run on
-a real terminal — an SSH session is fine, a piped or redirected stdin is not.
+a real terminal — an SSH session is fine, a piped or redirected stdin is not, and
+there the loop stops the motors and exits rather than spinning on the closed read.
 
 | Key | Action | Key | Action |
 | --- | --- | --- | --- |
@@ -94,21 +102,26 @@ a real terminal — an SSH session is fine, a piped or redirected stdin is not.
 | `S` / `s` | backward | `+` / `=` | speed +10 % |
 | `A` / `a` | gentle left turn | `-` / `_` | speed −10 % |
 | `D` / `d` | gentle right turn | `Q` / `q` | pivot left (sharp) |
-| `X` / `x` | stop and exit | `E` / `e` | pivot right (sharp) |
+| `X` / `x` or `Ctrl+C` | stop and exit | `E` / `e` | pivot right (sharp) |
 | any other key | stop, and report an unknown key | | |
 
 The fall-through-to-stop behaviour is deliberate: an unmapped key is treated as
-"do nothing dangerous".
+"do nothing dangerous". Raw mode clears ISIG, so `Ctrl+C` reaches the loop as the
+`0x03` byte and exits through the same path as `X`.
 
 ## Camera
 
 The scripts ask OpenCV for a V4L2 capture node, not for a libcamera stack:
 
-- `person_follow.py`: `cv2.VideoCapture('/dev/video0', cv2.CAP_V4L2)` at
-  640×480, 30 fps requested, buffer size 1, FourCC forced to `YUYV`, with a
-  fallback to `cv2.VideoCapture(0, cv2.CAP_V4L2)` if the named node will not open.
-- `detect.py`: `cv2.VideoCapture(device)` where `--device` defaults to `0`,
-  resized to `--width`×`--height` (640×360 default).
+- `person_follow.py`: `cv2.VideoCapture(CAMERA_SOURCE, cv2.CAP_V4L2)` at
+  `CAMERA_WIDTH`×`CAMERA_HEIGHT` (640×480), 30 fps requested, buffer size 1, FourCC
+  forced to `YUYV`, with a fallback to `cv2.VideoCapture(0, cv2.CAP_V4L2)` if the named
+  node will not open. The follow loop sizes its maths from `frame.shape`, so an
+  unexpected resolution still steers relative to the image in hand.
+- `detect.py`: `cv2.VideoCapture(device, cv2.CAP_V4L2)`; `--device` takes an index or a
+  `/dev/video` path and defaults to `/dev/video0`, frames are resized to
+  `--width`×`--height` (640×480 default), and it warns if the node reports a size other
+  than the request.
 
 Measured state on the Pi, from a bench run on 2026-09-13: `/dev/video0` is a
 **Logitech HD Pro Webcam C920** on USB, driver `uvcvideo`. It accepts the 640×480
@@ -131,11 +144,15 @@ unchanged. The USB webcam is the configuration that has actually been tested.
 ## Power and safety notes
 
 - There is no recorded wiring for the battery, no low-voltage monitoring, and no
-  watchdog. If the Pi and the motor rail share a supply, a brown-out mid-pivot can
-  leave the driver latched with the last PWM value applied.
+  hardware watchdog. `person_follow.py` does have a software one: `motor_watchdog()`
+  stops the drivetrain if the control loop goes `MOTOR_WATCHDOG_S` (0.75 s) without
+  commanding it, and it is a thread inside that process, so it cannot help a brown-out.
+  Teleop has no timeout at all — an untouched key keeps the last command running. If the
+  Pi and the motor rail share a supply, a brown-out mid-pivot can leave the driver
+  latched with the last PWM value applied.
 - No obstacle, cliff, or distance sensing exists in the code. The only thing that
   stops the robot for its own reasons is a person box taller than
-  `TOO_CLOSE_HEIGHT`, plus the loss-of-target stop.
+  `TOO_CLOSE_HEIGHT_RATIO` of the frame, plus the loss-of-target stop.
 - `person_follow.py` installs `SIGINT` and `SIGTERM` handlers that stop both
   motors and release the camera; `rover.py` does the same through its
   `try/except/finally`. Killing either with `SIGKILL` skips the cleanup and can
@@ -149,5 +166,5 @@ Not derivable from this repository, and deliberately not guessed here:
 - Exact driver module and whether its EN jumpers are fitted
 - Chassis, wheel diameter, track width, battery chemistry and capacity
 - Camera mounting height and pitch — the sensor is a Logitech C920, but its
-  angle changes the pixel-to-distance assumption behind `TOO_CLOSE_HEIGHT`
+  angle changes the pixel-to-distance assumption behind `TOO_CLOSE_HEIGHT_RATIO`
 - Whether the motor and logic supplies are common-grounded on purpose

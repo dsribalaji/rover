@@ -73,12 +73,10 @@ Thumbs.db
 # Logs
 *.log
 
-# Model files (uncomment if you want to exclude large model files)
-# *.pt
-# *.pth
-# *.ckpt
+# Model weights: fetched on first run by ultralytics, not committed to git.
+*.pt
+*.pth
+*.ckpt
 
 # Data
-*.json
-# rover_learning.json might be worth keeping as it stores learning data
-!rover_learning.json
+rover_data/

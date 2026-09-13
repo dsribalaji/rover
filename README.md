@@ -5,17 +5,22 @@ YOLOv8n, the largest detected `person` box is turned into left/right wheel speed
 and those drive a four-motor skid-steer chassis through two GPIOzero motor
 channels. The same drivetrain code doubles as a keyboard teleop and a bench test.
 
-The project is five files at the repository root. There is no package structure,
+The project is six files at the repository root. There is no package structure,
 build step, or service — each file is run directly with the project's Python
 interpreter.
 
 | File | Role | Moves the robot | Needs a camera |
 | --- | --- | --- | --- |
+| `drivetrain.py` | The one motor controller: pin map, gpiozero wiring, `drive(left, right)`. Imported, not run | — | No |
 | `person_follow.py` | Autonomous follow loop: detect, steer, search when the target is lost | Yes | Yes |
 | `rover.py` | Keyboard teleop — WASD, two pivot modes, live speed trim, safe-stop on any unknown key | Yes | No |
 | `detect.py` | Camera + YOLO inference logger. Prints per-frame detections and an EMA fps figure; no motion | No | Yes |
 | `motor_test.py` | One-shot drivetrain check: forward 2 s → stop → pivot right 2 s → stop | Yes | No |
 | `rover_learning.json` | Snapshot of tuned values from earlier sessions. **No script reads or writes it.** | — | — |
+
+`import person_follow` has no side effects: the model, camera, and GPIO pins are
+claimed inside `main()`, so the tuning constants are readable (and the module
+testable) on a machine with no hardware attached.
 
 ## Documentation
 
@@ -24,8 +29,8 @@ interpreter.
 | [docs/hardware.md](docs/hardware.md) | GPIO pin map, physical header pins, motor channel wiring, camera and power notes |
 | [docs/setup.md](docs/setup.md) | Environment on the Pi, installing dependencies, running each script, headless/SSH behaviour |
 | [docs/architecture.md](docs/architecture.md) | Control loop, steering maths, lost-target search states, adaptive low-light pipeline |
-| [docs/tuning.md](docs/tuning.md) | Every tuning constant, what it does, and which ones are currently inert |
-| [docs/code-notes.md](docs/code-notes.md) | Verified code observations, dead config, and gaps worth knowing before extending |
+| [docs/tuning.md](docs/tuning.md) | Every tuning constant, what it does, and the measured values behind it |
+| [docs/code-notes.md](docs/code-notes.md) | What the 2026-09-13 review fixed, what is still risky, and gaps worth knowing before extending |
 
 ## Hardware in one table
 
@@ -37,9 +42,11 @@ side through a dual H-bridge driver:
 | Left (motors 1 & 2) | `forward=23, backward=24, enable=12` | 23 / 24 / 12 | 16 / 18 / 32 |
 | Right (motors 3 & 4) | `forward=27, backward=22, enable=13` | 27 / 22 / 13 | 13 / 15 / 33 |
 
-All three scripts that touch the drivetrain use exactly these numbers. Speeds are
-handled as 0–100 integers in the code and divided by 100 before reaching gpiozero,
-whose `Motor.forward(speed)` / `Motor.backward(speed)` accept a 0.0–1.0 fraction.
+Those six numbers live in `drivetrain.py` and nowhere else; the teleop, the follow
+loop, and the bench test all read them from there. Speeds are handled as 0–100
+integers in the code and divided by 100 before reaching gpiozero, whose
+`Motor.forward(speed)` / `Motor.backward(speed)` accept a 0.0–1.0 fraction. The
+enable pins are the two hardware-PWM-capable GPIOs (12 and 13).
 
 ## Quick start
 
@@ -59,10 +66,17 @@ python3 -m venv yolo_env
 ./yolo_env/bin/pip install -r requirements.txt
 ```
 
-Stop any running script with `Ctrl+C`. `person_follow.py` and `detect.py` install
-explicit `SIGINT`/`SIGTERM` handlers that stop the motors and release the camera;
-`rover.py` does the same in a `finally` block; `motor_test.py` relies on gpiozero
-closing its devices when the interpreter exits.
+`rover.py` needs a real terminal and exits with an error message if stdin is a
+pipe. `person_follow.py` and `motor_test.py` detect the absence of gpiozero: the
+follow loop prints `*** SIMULATION MODE ***` and logs its motor decisions, and
+`motor_test.py` exits 1, since a drivetrain test without a drivetrain proves
+nothing.
+
+Stop any running script with `Ctrl+C`. All four scripts stop the motors on the way
+out: `person_follow.py` installs explicit `SIGINT`/`SIGTERM` handlers (plus a
+watchdog thread that stops the drivetrain if the control loop stops issuing
+commands), `rover.py` and `motor_test.py` do it in a `finally`, and
+`detect.py` has no drivetrain.
 
 ## What the follow loop actually does
 
@@ -70,7 +84,8 @@ closing its devices when the interpreter exits.
 is `person`, and derives a lateral offset from the frame centre. A proportional
 term on that offset speeds one side and slows the other, so the robot steers
 toward the person while continuing to move forward. If the box gets taller than
-`TOO_CLOSE_HEIGHT` the robot stops rather than running into you.
+`TOO_CLOSE_HEIGHT_RATIO` of the frame height, the robot stops rather than running
+into you.
 
 When no person is in frame, the robot does not freeze: it keeps scanning in the
 direction the person was last drifting, then — after a few seconds — alternates
@@ -79,7 +94,9 @@ which case it stops. The full state logic, with numbers, is in
 [docs/architecture.md](docs/architecture.md).
 
 Current tuned defaults (as committed): `FORWARD_SPEED = 80`, `CONFIDENCE_THRESHOLD
-= 0.45`, `INPUT_SIZE = 416`, `MIN_TRACK_SPEED = 35`, `TOO_CLOSE_HEIGHT = 600`.
+= 0.45`, `INPUT_SIZE = 416`, `MIN_TRACK_SPEED = 35`, `TOO_CLOSE_HEIGHT_RATIO =
+0.99`, `MOTOR_WATCHDOG_S = 0.75`, `FRAME_SKIP = 0`. Every constant is in the
+`CONFIG` block at the top of the file — see [docs/tuning.md](docs/tuning.md).
 
 ## Current state of the hardware
 
@@ -112,12 +129,18 @@ included; 640-pixel inference takes ~0.11 s (≈9/s). Details and caveats in
 
 ## Repository conventions
 
-- `yolo_env/` (5.1 GB on the Pi) and `__pycache__/` are gitignored. Never commit the
-  virtualenv; it is aarch64-specific and rebuildable from `requirements.txt`.
-- `yolov8n.pt` (6.2 MB) **is** committed, so a fresh clone can run without
-  downloading weights first. The `*.pt` ignore lines in `.gitignore` are commented
-  out deliberately.
-- `.gitignore` ignores `*.json` wholesale and re-includes only
-  `rover_learning.json`. Any new JSON config or dataset manifest will be silently
-  untracked unless you negate it explicitly.
+- `yolo_env/` (5.1 GB on the Pi) and `rover_data/` (capture folders from
+  `detect.py`) are gitignored. Never commit the virtualenv; it is aarch64-specific
+  and rebuildable from `requirements.txt`.
+- `yolov8n.pt` is **not** tracked. Ultralytics' own weights are AGPL-licensed and
+  ~6 MB; the library downloads the file into the working directory on first run, so
+  a fresh clone needs one network-connected run (or a manual copy) before
+  `person_follow.py` or `detect.py` will start. `MODEL_PATH` is resolved relative to
+  the current directory, so run from the project root.
+- `rover_learning.json` is tracked deliberately: it is small, hand-written, and the
+  only record of earlier tuning sessions.
+- `LICENSE` is AGPL-3.0, chosen because `ultralytics` is AGPL-3.0 and this program
+  links against it. See
+  [docs/code-notes.md](docs/code-notes.md#4-licensing-and-repository-hygiene)
+  for the way out if that license is ever a problem.
 - `origin` points at `https://github.com/dsribalaji/rover.git`.
