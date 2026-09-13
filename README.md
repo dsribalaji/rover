@@ -84,20 +84,30 @@ Current tuned defaults (as committed): `FORWARD_SPEED = 80`, `CONFIDENCE_THRESHO
 ## Current state of the hardware
 
 Verified over SSH on the Pi used for development (hostname `otwos`, Raspberry Pi 5
-Model B Rev 1.1, Debian 13 trixie, kernel `6.18.29+rpt-rpi-2712`):
+Model B Rev 1.1, Debian 13 trixie, kernel `6.18.29+rpt-rpi-2712`), including a bench
+run on 2026-09-13 with the camera and L298N wired:
 
-- `rpicam-hello --list-cameras` reports **No cameras available** and `/dev/video0`
-  does not exist. No camera is attached or enabled right now, so `detect.py` and
-  `person_follow.py` will exit at the camera-open step until one is connected.
-- The only video nodes present are the Pi's own ISP and codec devices
-  (`pispbe` → `/dev/video20`–`/dev/video35`, `rpi-hevc-dec` → `/dev/video19`).
-  Neither script is wired to those; both expect a standard V4L2 capture node.
+- **Camera works.** A Logitech HD Pro Webcam C920 on USB (`uvcvideo`) presents
+  `/dev/video0`, holds 640×480 at the requested rate, and delivered 60/60 frames at
+  ~26 fps. `rpicam-hello --list-cameras` still says "No cameras available" because
+  that tool only lists ribbon-connector cameras seen by libcamera; the scripts go
+  through OpenCV/V4L2, which sees the webcam fine.
+- **Detection works.** Over 25 s of live video, YOLOv8n at `imgsz=416` found a person
+  in 152 of 181 inference frames at confidence 0.53–0.91, running 7.4 inferences/s
+  end to end.
+- **The drivetrain path is clean.** `motor_test.py` completed its forward → stop →
+  pivot sequence with no gpiozero errors, so GPIO 12/13/22/23/24/27 were claimed and
+  hardware PWM on 12/13 was accepted. `person_follow.py` produced sensible steering
+  for 25 s — `following left | left=44% right=100%` narrowing to `left=73% right=87%`
+  as the lateral offset fell from −194 px to −39 px. Whether each wheel physically
+  turned is a bench observation, not something the software can prove.
 - Motor pins are defined in software only. Nothing in the repo records the chassis,
   motor model, driver module part number, or battery — see the unknowns list in
   [docs/hardware.md](docs/hardware.md).
 
 Measured on that board, YOLOv8n on CPU runs a 416-pixel inference in ~0.06 s (≈17/s)
-and a 640-pixel one in ~0.11 s (≈9/s). Details and caveats in
+in isolation and ~7.4/s inside the real loop once capture and pre-processing are
+included; 640-pixel inference takes ~0.11 s (≈9/s). Details and caveats in
 [docs/code-notes.md](docs/code-notes.md#6-performance).
 
 ## Repository conventions

@@ -73,9 +73,10 @@ ls -l /dev/gpiochip0
 groups | tr ' ' '\n' | grep -E 'gpio|video'
 ```
 
-On the development Pi, `/dev/video0` currently does not exist and `rpicam-hello`
-reports no cameras, so the two camera scripts will fail at open until a camera is
-connected.
+On the development Pi this currently resolves to a Logitech HD Pro Webcam C920 on
+USB, and both camera scripts run against it. `rpicam-hello` reporting "no cameras"
+does not mean the scripts will fail — that tool only sees ribbon-connector cameras,
+not the V4L2 node OpenCV uses.
 
 ## Running
 

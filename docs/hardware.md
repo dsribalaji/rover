@@ -110,17 +110,23 @@ The scripts ask OpenCV for a V4L2 capture node, not for a libcamera stack:
 - `detect.py`: `cv2.VideoCapture(device)` where `--device` defaults to `0`,
   resized to `--width`×`--height` (640×360 default).
 
-Measured state on the Pi as of the last check: `/dev/video0` does not exist and
-`rpicam-hello --list-cameras` prints `No cameras available!`. The only video nodes
-are the board's own ISP and codec devices — `pispbe` on `/dev/video20`–`/dev/video35`
-plus `/dev/media1` and `/dev/media2`, and `rpi-hevc-dec` on `/dev/video19` plus
-`/dev/media0`. `/boot/firmware/config.txt` has `camera_auto_detect=1`, so a camera
-attached to the Pi's camera connector would be picked up at boot; `picamera2
-0.3.36` is installed in the environment but no script imports it.
+Measured state on the Pi, from a bench run on 2026-09-13: `/dev/video0` is a
+**Logitech HD Pro Webcam C920** on USB, driver `uvcvideo`. It accepts the 640×480
+request at 30 fps and delivered 60/60 frames at ~26 fps in a straight read loop. Mean
+frame brightness was 135.9 in a lit room, which sits comfortably between the
+`LOW_LIGHT_THRESHOLD` (72) and `BRIGHT_LIGHT_THRESHOLD` (145) gates, so neither the
+CLAHE path nor the auto-gain loop engages in those conditions.
 
-Practical implication: connect a camera (Pi camera module on the ribbon connector,
-or a USB webcam, which also lands on `/dev/video0`) before running `detect.py` or
-`person_follow.py`, or both exit with a camera-open error.
+Note that `rpicam-hello --list-cameras` still prints `No cameras available!` with the
+webcam connected — that tool only reports ribbon-connector cameras through libcamera.
+The board's own ISP and codec nodes (`pispbe` on `/dev/video20`–`/dev/video35`,
+`rpi-hevc-dec` on `/dev/video19`) are unrelated to what these scripts open, and
+`picamera2 0.3.36` is installed but imported by nothing. `/boot/firmware/config.txt`
+does carry `camera_auto_detect=1`, so a Pi camera module would also work on the same
+V4L2 path.
+
+Practical implication: either camera type lands on `/dev/video0` and the scripts run
+unchanged. The USB webcam is the configuration that has actually been tested.
 
 ## Power and safety notes
 
@@ -142,6 +148,6 @@ Not derivable from this repository, and deliberately not guessed here:
 - Motor part number, voltage, stall current, and gear ratio
 - Exact driver module and whether its EN jumpers are fitted
 - Chassis, wheel diameter, track width, battery chemistry and capacity
-- Camera model, lens, and mounting height/pitch (changes the pixel-to-angle
-  assumption behind `TURN_GAIN` and `TOO_CLOSE_HEIGHT`)
+- Camera mounting height and pitch — the sensor is a Logitech C920, but its
+  angle changes the pixel-to-distance assumption behind `TOO_CLOSE_HEIGHT`
 - Whether the motor and logic supplies are common-grounded on purpose

@@ -157,8 +157,10 @@ which is the whole reason the follower does not use the `detect.py` default. Sec
 rather than raising — it does nothing useful here, since half precision needs CUDA, but
 it is not a bug.
 
-Add capture, the gray-conversion, any CLAHE pass, and box parsing and the real loop
-runs below the ≈17 /s ceiling; the script's own `FPS:` line is the number to trust for
-a given scene. Note that `detect.py`'s EMA figure measures inference time only, not
-end-to-end loop rate, so the two scripts are not directly comparable.
+The real loop runs slower than the isolated figure, as expected: a 25-second run of
+`person_follow.py` against a live C920 stream reported `FPS: 7.4` end to end, with
+detections in 152 of 181 frames. So capture, the gray conversion, letterboxing, and
+box parsing together cost roughly 40 % of the throughput. `detect.py`'s EMA measures
+inference time only, not the end-to-end loop rate, so the two scripts are not
+directly comparable.
 
