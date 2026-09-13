@@ -1,3 +1,16 @@
+"""Autonomous person-following loop: YOLOv8n detection drives differential steering.
+
+Run from the repository root on the Pi (MODEL_PATH is relative):
+
+    ./yolo_env/bin/python person_follow.py
+
+Has no command-line arguments; everything is configured in the CONFIG block below.
+Behaviour, the steering maths, and the lost-target search ladder are described in
+docs/architecture.md; each knob is listed with its current value in docs/tuning.md.
+Note that this file loads the model, opens the camera, and claims the GPIO pins at
+import time.
+"""
+
 import cv2
 from ultralytics import YOLO
 import os

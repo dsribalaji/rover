@@ -1,0 +1,22 @@
+# Direct imports used by the rover scripts, pinned to the versions measured in
+# yolo_env on the Raspberry Pi 5 (Python 3.13.5, Debian 13 trixie).
+# Transitive deps of ultralytics (pillow, matplotlib, scipy, torchvision, …) are
+# resolved by pip; they are not listed here.
+
+ultralytics==8.4.48
+opencv-python==4.13.0.92
+numpy==2.4.4
+gpiozero==2.0.1
+
+# ultralytics needs a torch build. The Pi currently carries 2.11.0+cu130 with CUDA
+# unavailable, i.e. it runs CPU inference. A plain `pip install torch` on aarch64
+# pulls the default PyPI wheel, which is what you want on a Pi.
+torch==2.11.0
+
+# gpiozero backends present in the existing venv; installed as deps on a Pi image.
+# lgpio==0.2.2.0
+# gpiod==2.2.0
+
+# Installed in the existing venv but not imported by any script — the camera path
+# goes through OpenCV/V4L2, not picamera2. Uncomment if you switch capture backends.
+# picamera2==0.3.36

@@ -1,3 +1,15 @@
+"""Keyboard teleop for the rover's two-channel drivetrain.
+
+Run from a terminal on the Pi (raw-mode stdin, so a pipe or cron job will not work):
+
+    ./yolo_env/bin/python rover.py
+
+W/S forward/back, A/D gentle turns, Q/E pivots, Space stop, +/- speed trim, X exit.
+Any unmapped key stops the robot. Wiring and the 0-100 percent speed convention are
+documented in docs/hardware.md; the same pin set appears in person_follow.py and
+motor_test.py.
+"""
+
 from gpiozero import Motor
 import time
 import sys

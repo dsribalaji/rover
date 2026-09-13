@@ -1,3 +1,12 @@
+"""One-shot drivetrain check: forward, stop, pivot right, stop.
+
+    ./yolo_env/bin/python motor_test.py
+
+Uses the same BCM pins as rover.py and person_follow.py, on bare gpiozero Motor
+objects rather than the controller class, so it also confirms the pins themselves are
+reachable. Expect about 5 seconds of motion. Stop early with Ctrl+C.
+"""
+
 from gpiozero import Motor
 import time
 import sys
