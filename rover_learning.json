@@ -1,0 +1,11 @@
+{
+  "follow_speed": 83,
+  "brake_height_px": 395,
+  "stop_height_px": 440,
+  "search_turn_speed": 52,
+  "confidence_thr": 0.49,
+  "sessions": 5,
+  "total_detections": 2646,
+  "total_lost_events": 12,
+  "total_close_bumps": 23
+}
